@@ -1,0 +1,9 @@
+{{- if .Values.config.disabled }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "{{ .Values.service.name }}"
+data:
+{{ .Files.Get (printf "%s/config/config.toml" .Values.environment)  | indent 2 }}
+{{- end }}

@@ -1,0 +1,30 @@
+{{- if .Values.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+{{- if .Values.service.name }}
+  name: {{ .Values.service.name }}
+{{- else }}
+  name: {{ template "fullname" . }}
+{{- end }}
+  labels:
+    chart: "{{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}"
+{{- if .Values.service.annotations }}
+  annotations:
+{{ toYaml .Values.service.annotations | indent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: 4443
+    targetPort: 4443
+    name: port1  
+  - port: 4442
+    targetPort: 4442
+    name: port0  
+  - port: 4444
+    targetPort: {{ .Values.service.internalPort }}
+    name: http
+  selector:
+    app: {{ .Values.service.name }}
+{{- end }}

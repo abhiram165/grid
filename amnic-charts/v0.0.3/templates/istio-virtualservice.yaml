@@ -1,0 +1,41 @@
+{{- if .Values.istio.virtualService.external.enabled -}}
+  {{- $serviceName := .Values.service.name -}}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: "{{ $serviceName }}"
+spec:
+  hosts:
+  - "{{ .Values.ingress.external.host }}"
+  gateways:
+  - "{{ .Values.environment }}-ingress-gateway"
+  http:
+  - match:
+  {{- range $app := .Values.istio.virtualService.external.paths }}
+    - uri:
+        prefix: "/{{ $app.name }}"
+  {{- end }}
+    route:
+    - destination:
+        host: "{{ $serviceName }}"
+        port:
+          number: 4444
+    {{- if or (eq .Values.rollout.strategy "blue_green") (and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "host_level")) }}
+      weight: 100
+    - destination:
+        host: "{{ $serviceName }}-preview"
+        port:
+          number: 4444
+      weight: 0
+    {{- end }}
+    {{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "subset_level") }}
+        subset: "stable-{{ $serviceName }}-subset"
+      weight: 100
+    - destination:
+        host: "{{ $serviceName }}"
+        port:
+          number: 4444
+        subset: "canary-{{ $serviceName }}-subset"
+      weight: 0
+    {{- end }}
+{{- end -}}

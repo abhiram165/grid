@@ -1,0 +1,307 @@
+{{- if .Values.service.enabled }}
+  {{- $serviceName := .Values.service.name -}}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ $serviceName }}
+  labels:
+    amnicRevision: {{ .Values.amnic.revision | quote }}
+    chart: {{ .Values.amnic.runtimeVersion }}
+spec:
+
+  {{- if .Values.hpa.enabled }}
+  {{- else }}
+  # Number of desired pods.
+  # Defaults to 1.
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}  
+  
+  
+  analysis:
+    # limits the number of successful analysis runs and experiments to be stored in a history
+    # Defaults to 5.
+    successfulRunHistoryLimit: {{ .Values.rollout.revisionHistoryLimit }}
+    # limits the number of unsuccessful analysis runs and experiments to be stored in a history. 
+    # Stages for unsuccessful: "Error", "Failed", "Inconclusive"
+    # Defaults to 5.
+    unsuccessfulRunHistoryLimit: {{ .Values.rollout.revisionHistoryLimit }}
+
+  # Label selector for pods. Existing ReplicaSets whose pods are selected by
+  # this will be the ones affected by this rollout. It must match the pod
+  # template's labels.
+  selector:
+    matchLabels:
+      app: {{ $serviceName }}
+
+  # Usual K8s Deployment template spec to be specified here
+  template:
+    metadata:
+      labels:
+        draft: {{ default "draft-app" .Values.draft }}
+        app: {{ $serviceName }}
+        amnicRevision: {{ .Values.amnic.revision | quote }}
+{{- if .Values.podAnnotations }}
+      annotations:
+{{ toYaml .Values.podAnnotations | indent 8 }}
+{{- end }}
+    spec:
+{{- if .Values.serviceAccount.enabled }}
+      serviceAccountName: {{ $serviceName }}
+{{- end }}
+      containers:
+      - name: {{ $serviceName }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        env:
+        - name: VERSION
+          value: {{ .Chart.Version }}
+{{- range $pkey, $pval := .Values.env }}
+        - name: {{ $pkey }}
+          value: {{ quote $pval }}
+{{- end }}
+        envFrom:
+        - configMapRef:
+            name: {{ $serviceName }}
+            optional: {{ .Values.config.disabled }}
+    {{- if .Values.secrets.enabled }}
+        {{- range $secretstore := .Values.secrets.config.secret }}
+        - secretRef:
+            name: {{$serviceName}}-secret-{{lower $secretstore.type}}-{{$secretstore.region}}
+            optional: false
+        {{- end}}
+    {{- end}}
+        ports:
+        - name: http
+          containerPort: {{ .Values.service.internalPort }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.livenessProbe.probePath | default .Values.probePath }}
+            port: {{ .Values.service.internalPort }}
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          successThreshold: {{ .Values.livenessProbe.successThreshold }}
+          timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+        readinessProbe:
+          httpGet:
+            path: {{ .Values.readinessProbe.probePath | default .Values.probePath }}
+            port: {{ .Values.service.internalPort }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+          successThreshold: {{ .Values.readinessProbe.successThreshold }}
+          timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+        resources:
+{{ toYaml .Values.resources | indent 12 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
+{{- if ne (( first .Values.amnic.imagePullSecrets )) nil }}
+      imagePullSecrets:
+{{- range $pval := .Values.amnic.imagePullSecrets }}
+      - name: {{ quote $pval }}
+{{- end }}
+{{- end }}
+
+  {{- if ne (( .Values.rollout.minReadySeconds | toString)) "0" }}
+  # Minimum number of seconds for which a newly created pod should be ready
+  # without any of its container crashing, for it to be considered available.
+  # Defaults to 0 (pod will be considered available as soon as it is ready)
+  minReadySeconds: {{ .Values.rollout.minReadySeconds }}
+  {{- end }}
+
+  # The number of old ReplicaSets to retain.
+  # Defaults to 10
+  revisionHistoryLimit: {{ .Values.rollout.revisionHistoryLimit }}
+
+  {{- if .Values.rollout.progressDeadlineAbort }}
+  # Whether to abort the update when ProgressDeadlineSeconds
+  # is exceeded if analysis or experiment is not used.
+  # Optional and default is false.
+  progressDeadlineAbort: {{ .Values.rollout.progressDeadlineAbort }}
+
+  # The maximum time in seconds in which a rollout must make progress during
+  # an update, before it is considered to be failed. Argo Rollouts will
+  # continue to process failed rollouts and a condition with a
+  # ProgressDeadlineExceeded reason will be surfaced in the rollout status.
+  # Note that progress will not be estimated during the time a rollout is
+  # paused.
+  # Defaults to 600s
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- end }}
+
+  # UTC timestamp in which a Rollout should sequentially restart all of
+  # its pods. Used by the `kubectl argo rollouts restart ROLLOUT` command.
+  # The controller will ensure all pods have a creationTimestamp greater
+  # than or equal to this value.
+  # restartAt: "2020-03-30T21:19:35Z"
+
+  strategy:
+
+    {{- if eq .Values.rollout.strategy "blue_green" }}
+    # blue_green update strategy
+    blueGreen:
+
+      # Reference to service that the rollout modifies as the active service.
+      # Required.
+      activeService: {{ $serviceName }}
+
+      # Name of the service that the rollout modifies as the preview service.
+      # +optional
+      previewService: {{ $serviceName }}-preview
+
+      # The number of replicas to run under the preview service before the
+      # switchover. Once the rollout is resumed the new ReplicaSet will be fully
+      # scaled up before the switch occurs +optional
+      previewReplicaCount: {{ .Values.rollout.blueGreen.previewReplicaCount }}
+
+      # Indicates if the rollout should automatically promote the new ReplicaSet
+      # to the active service or enter a paused state. If not specified, the
+      # default value is true. +optional
+      autoPromotionEnabled: {{ .Values.rollout.blueGreen.autoPromotionEnabled }}
+
+      # Automatically promotes the current ReplicaSet to active after the
+      # specified pause delay in seconds after the ReplicaSet becomes ready.
+      # If omitted, the Rollout enters and remains in a paused state until
+      # manually resumed by resetting spec.Paused to false. +optional
+      autoPromotionSeconds: {{ .Values.rollout.blueGreen.autoPromotionSeconds }}
+
+      # Adds a delay before scaling down the previous ReplicaSet. If omitted,
+      # the Rollout waits 30 seconds before scaling down the previous ReplicaSet.
+      # A minimum of 30 seconds is recommended to ensure IP table propagation
+      # across the nodes in a cluster.
+      scaleDownDelaySeconds: {{ .Values.rollout.scaleDownDelaySeconds }}
+
+      # Limits the number of old RS that can run at once before getting scaled
+      # down. Defaults to nil
+      scaleDownDelayRevisionLimit: {{ max .Values.rollout.scaleDownDelayRevisionLimit .Values.rollout.revisionHistoryLimit }}
+
+      # Add a delay in second before scaling down the preview replicaset
+      # if update is aborted. 0 means not to scale down. Default is 30 second
+      abortScaleDownDelaySeconds: {{ .Values.rollout.abortScaleDownDelaySeconds }}
+
+    {{- end }}
+
+    {{- if eq .Values.rollout.strategy "canary" }}
+    # Canary update strategy
+    canary:
+
+      {{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "host_level") }}
+      #Setting up multiple services for host_level traffic splitting
+
+      # Reference to a service which the controller will update to select
+      # canary pods. Required for traffic routing.
+      canaryService: {{ $serviceName }}-preview
+
+      # Reference to a service which the controller will update to select
+      # stable pods. Required for traffic routing.
+      stableService: {{ $serviceName }}
+      {{- end }}
+
+      # Metadata which will be attached to the canary pods. This metadata will
+      # only exist during an update, since there are no canary pods in a fully
+      # promoted rollout.
+      canaryMetadata:
+        annotations:
+          role: canary
+        labels:
+          role: canary
+
+      # metadata which will be attached to the stable pods
+      stableMetadata:
+        annotations:
+          role: stable
+        labels:
+          role: stable
+
+      # The maximum number of pods that can be unavailable during the update.
+      # Value can be an absolute number (ex: 5) or a percentage of total pods
+      # at the start of update (ex: 10%). Absolute number is calculated from
+      # percentage by rounding down. This can not be 0 if  MaxSurge is 0. By
+      # default, a fixed value of 1 is used. Example: when this is set to 30%,
+      # the old RC can be scaled down by 30% immediately when the rolling
+      # update starts. Once new pods are ready, old RC can be scaled down
+      # further, followed by scaling up the new RC, ensuring that at least 70%
+      # of original number of pods are available at all times during the
+      # update. +optional
+      maxUnavailable: {{ .Values.rollout.canary.maxUnavailable }}
+
+      # The maximum number of pods that can be scheduled above the original
+      # number of pods. Value can be an absolute number (ex: 5) or a
+      # percentage of total pods at the start of the update (ex: 10%). This
+      # can not be 0 if MaxUnavailable is 0. Absolute number is calculated
+      # from percentage by rounding up. By default, a value of 1 is used.
+      # Example: when this is set to 30%, the new RC can be scaled up by 30%
+      # immediately when the rolling update starts. Once old pods have been
+      # killed, new RC can be scaled up further, ensuring that total number
+      # of pods running at any time during the update is at most 130% of
+      # original pods. +optional
+      maxSurge: "{{ .Values.rollout.canary.maxSurgePercentage }}%"
+
+      # Steps define sequence of steps to take during an update of the
+      # canary. Skipped upon initial deploy of a rollout. +optional
+      {{- if .Values.rollout.canary.steps }}
+      steps:
+      {{- range $canaryStepValue := .Values.rollout.canary.steps }}
+      {{ printf "- %s: %v" $canaryStepValue.key (( toJson $canaryStepValue.value)) }}
+      {{- end }}
+      {{- end }}
+
+      {{- if or .Values.istio.virtualService.external.enabled .Values.istio.virtualService.internal.enabled }}
+
+      # Adds a delay before scaling down the previous ReplicaSet when the
+      # canary strategy is used with traffic routing (default 30 seconds).
+      # A delay in scaling down the previous ReplicaSet is needed after
+      # switching the stable service selector to point to the new ReplicaSet,
+      # in order to give time for traffic providers to re-target the new pods.
+      # This value is ignored with basic, replica-weighted canary without
+      # traffic routing.
+      scaleDownDelaySeconds: {{ .Values.rollout.scaleDownDelaySeconds }}
+
+      # Limits the number of old RS that can run at one time before getting
+      # scaled down. Defaults to nil
+      scaleDownDelayRevisionLimit: {{ max .Values.rollout.scaleDownDelayRevisionLimit .Values.rollout.revisionHistoryLimit }}
+
+      # Traffic routing specifies the ingress controller or service mesh
+      # configuration to achieve advanced traffic splitting. If omitted,
+      # will achieve traffic split via a weighted replica counts between
+      # the canary and stable ReplicaSet.
+      trafficRouting:
+
+        # Istio traffic routing configuration
+        istio:
+          virtualServices:
+
+          {{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "host_level") }}
+          #Setting Multiple Virtual Services for host_level traffic splitting
+          {{- if .Values.istio.virtualService.internal.enabled }}
+          - name: internal-{{ $serviceName }}  # required
+          {{- end }}
+          {{- if .Values.istio.virtualService.external.enabled }}
+          - name: {{ $serviceName }}  # required
+          {{- end }}
+          {{- end }}
+
+          {{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "subset_level") }}
+          #Setting Multiple Virtual Services and destination rules for subset_level traffic splitting
+          {{- if .Values.istio.virtualService.internal.enabled }}
+          - name: internal-{{ $serviceName }}  # required
+          {{- end }}
+          {{- if .Values.istio.virtualService.external.enabled }}
+          - name: {{ $serviceName }}  # required
+          {{- end }}
+          destinationRule:
+            name: {{ $serviceName }}-destrule    # required
+            canarySubsetName: canary-{{ $serviceName }}-subset  # required
+            stableSubsetName: stable-{{ $serviceName }}-subset  # required
+          {{- end }}
+        
+      # Add a delay in second before scaling down the canary pods when update
+      # is aborted for canary strategy with traffic routing (not applicable for basic canary).
+      # 0 means canary pods are not scaled down. Default is 30 seconds.
+      abortScaleDownDelaySeconds: {{ .Values.rollout.abortScaleDownDelaySeconds }}
+      {{- end }}
+    {{- end }}
+
+    {{- if eq .Values.rollout.strategy "rolling" }}
+    # Rolling update strategy
+    canary:
+      maxSurge: "{{ .Values.rollout.canary.maxSurgePercentage }}%"
+      maxUnavailable: {{ .Values.rollout.canary.maxUnavailable }}
+    {{- end }}
+{{- end -}}

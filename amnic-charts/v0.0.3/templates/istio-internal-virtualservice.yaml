@@ -1,0 +1,35 @@
+{{- if .Values.istio.virtualService.internal.enabled -}}
+  {{- $serviceName := .Values.service.name -}}
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: "internal-{{ $serviceName }}"
+spec:
+  hosts:
+  - "{{ .Values.ingress.internal.host }}"
+  gateways:
+  - "{{ .Values.environment }}-internal-ingress-gateway"
+  http:
+  - match:
+  {{- range $app := .Values.istio.virtualService.internal.paths }}
+    - uri:
+        prefix: "/{{ $app.name }}"
+  {{- end }}
+    route:
+    - destination:
+        host: "{{ $serviceName }}"
+    {{- if or (eq .Values.rollout.strategy "blue_green") (and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "host_level")) }}
+      weight: 100
+    - destination:
+        host: "{{ $serviceName }}-preview"
+      weight: 0
+    {{- end }}
+    {{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "subset_level") }}
+        subset: "stable-{{ $serviceName }}-subset"
+      weight: 100
+    - destination:
+        host: rollout-example
+        subset: "canary-{{ $serviceName }}-subset"
+      weight: 0
+    {{- end }}
+{{- end -}}

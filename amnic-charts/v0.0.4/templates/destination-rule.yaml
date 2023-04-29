@@ -1,0 +1,18 @@
+{{- if or .Values.routing.external.enabled .Values.routing.internal.enabled }}
+{{- if and (eq .Values.rollout.strategy "canary") (eq .Values.rollout.canary.trafficSplitting "subset_level") }}
+  {{- $serviceName := .Values.service.name -}}
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: {{ $serviceName }}-destrule
+spec:
+  host: {{ $serviceName }}
+  subsets:
+  - name: "canary-{{ $serviceName }}-subset"   # referenced in canary.trafficRouting.istio.destinationRule.canarySubsetName
+    labels:        # labels will be injected with canary rollouts-pod-template-hash value
+      app: {{ $serviceName }}
+  - name: "stable-{{ $serviceName }}-subset"   # referenced in canary.trafficRouting.istio.destinationRule.stableSubsetName
+    labels:        # labels will be injected with stable rollouts-pod-template-hash value
+      app: {{ $serviceName }}
+{{- end }}
+{{- end }}
