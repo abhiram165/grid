@@ -19,7 +19,7 @@ amnic:
   releaseCRD: false
 # HorizontalPodAutoscaler
 hpa:
-  enabled: true
+  enabled: false
   minReplicas: 1
   maxReplicas: 1
   cpuTargetAverageUtilization: 80
